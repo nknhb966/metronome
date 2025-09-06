@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>スマホ用メトロノーム</title>
+<style>
+  body {
+    font-family: sans-serif;
+    text-align: center;
+    background: #f8f8f8;
+  }
+  h1 {
+    font-size: 2.0em;
+    margin-bottom: 10px;
+  }
+  .slider-container {
+    margin: 20px 0;
+  }
+  input[type="range"] {
+    width: 80%;
+  }
+  .value {
+    font-size: 1.2em;
+  }
+  .time {
+    font-size: 5em;
+  }
+  .currenttime {
+    font-size: 4em;
+    color: #666;
+  }
+  button {
+    font-size: 1.2em;
+    margin: 8px;
+    padding: 12px 20px;
+    border: none;
+    border-radius: 30px;
+    background: #333;
+    color: #fff;
+    width: 80%;
+    max-width: 300px;
+  }
+  button:disabled {
+    background: #aaa;
+    color: #666;
+  }
+  input:disabled {
+    opacity: 0.5;
+  }
+</style>
+</head>
+<body>
+  <h1>メトロノーム</h1>
+
+  <div class="slider-container">
+    <label for="tempo">テンポ</label>
+    <input type="range" id="tempo" min="40" max="200">
+    <div class="value" id="tempoValue"></div>
+  </div>
+
+  <div class="slider-container">
+    <label for="beats">拍数　</label>
+    <input type="range" id="beats" min="1" max="16">
+    <div class="value" id="beatsValue"></div>
+  </div>
+
+  <div class="time" id="stopwatch">00:00:00</div>
+  <div class="currenttime" id="currentTime"></div>
+
+  <button id="toggleBtn">▶ スタート</button>
+  <button id="resetBtn">🔄 リセット</button>
+  <button id="fullResetBtn">⏹ 完全リセット</button>
+
+<script>
+let tempoInput = document.getElementById("tempo");
+let beatsInput = document.getElementById("beats");
+let tempoValue = document.getElementById("tempoValue");
+let beatsValue = document.getElementById("beatsValue");
+let stopwatchEl = document.getElementById("stopwatch");
+let currentTimeEl = document.getElementById("currentTime");
+
+let toggleBtn = document.getElementById("toggleBtn");
+let resetBtn = document.getElementById("resetBtn");
+let fullResetBtn = document.getElementById("fullResetBtn");
+
+let metronomeInterval = null;
+let stopwatchInterval = null;
+let elapsed = 0;
+let isRunning = false;
+let beatCount = 0;
+
+// ---- サウンド生成 ----
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playClick(high = false) {
+  const osc = audioCtx.createOscillator();
+  const envelope = audioCtx.createGain();
+  osc.type = "square";
+  osc.frequency.value = high ? 2000 : 1000; // 1拍目は高音
+  envelope.gain.setValueAtTime(1, audioCtx.currentTime);
+  envelope.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
+  osc.connect(envelope).connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.1);
+}
+
+// LocalStorage
+function loadSettings() {
+  tempoInput.value = localStorage.getItem("tempo") || 60;
+  beatsInput.value = localStorage.getItem("beats") || 1;
+  tempoValue.textContent = tempoInput.value + " BPM";
+  beatsValue.textContent = beatsInput.value + " 拍";
+}
+function saveSettings() {
+  localStorage.setItem("tempo", tempoInput.value);
+  localStorage.setItem("beats", beatsInput.value);
+}
+
+// ストップウォッチ
+function updateStopwatch() {
+  let hrs = String(Math.floor(elapsed / 3600)).padStart(2, "0");
+  let mins = String(Math.floor((elapsed % 3600) / 60)).padStart(2, "0");
+  let secs = String(elapsed % 60).padStart(2, "0");
+  stopwatchEl.textContent = `${hrs}:${mins}:${secs}`;
+}
+
+// メトロノーム開始
+function startMetronome() {
+  if (isRunning) return;
+
+  isRunning = true;
+  toggleBtn.textContent = "⏸ ストップ";
+
+  tempoInput.disabled = true;
+  beatsInput.disabled = true;
+  resetBtn.disabled = true;
+  fullResetBtn.disabled = true;
+
+  let tempo = parseInt(tempoInput.value);
+  let beats = parseInt(beatsInput.value);
+  let interval = 60000 / tempo;
+
+  stopwatchInterval = setInterval(() => {
+    elapsed++;
+    updateStopwatch();
+  }, 1000);
+
+  metronomeInterval = setInterval(() => {
+    beatCount = (beatCount % beats) + 1;
+    playClick(beatCount === 1);
+  }, interval);
+}
+
+
+// 停止
+function stopMetronome() {
+  clearInterval(metronomeInterval);
+  clearInterval(stopwatchInterval);
+  metronomeInterval = null;
+  stopwatchInterval = null;
+  isRunning = false;
+  toggleBtn.textContent = "▶ スタート";
+
+  tempoInput.disabled = false;
+  beatsInput.disabled = false;
+  resetBtn.disabled = false;
+  fullResetBtn.disabled = false;
+}
+
+// リセット
+function resetMetronome() {
+  stopMetronome();
+  elapsed = 0;
+  updateStopwatch();
+}
+
+// 完全リセット
+function fullResetMetronome() {
+  resetMetronome();
+  tempoInput.value = 60;
+  beatsInput.value = 1;
+  tempoValue.textContent = "60 BPM";
+  beatsValue.textContent = "1 拍";
+  saveSettings();
+}
+
+// 現在時刻
+function updateCurrentTime() {
+  let now = new Date();
+  let h = String(now.getHours()).padStart(2, "0");
+  let m = String(now.getMinutes()).padStart(2, "0");
+  let s = String(now.getSeconds()).padStart(2, "0");
+  currentTimeEl.textContent = `${h}:${m}:${s}`;
+}
+setInterval(updateCurrentTime, 1000);
+
+// イベント
+tempoInput.oninput = () => {
+  tempoValue.textContent = tempoInput.value + " BPM";
+  saveSettings();
+};
+beatsInput.oninput = () => {
+  beatsValue.textContent = beatsInput.value + " 拍";
+  saveSettings();
+};
+
+toggleBtn.onclick = () => {
+  if (isRunning) stopMetronome();
+  else startMetronome();
+};
+resetBtn.onclick = resetMetronome;
+fullResetBtn.onclick = fullResetMetronome;
+
+// 初期化
+loadSettings();
+updateStopwatch();
+updateCurrentTime();
+</script>
+</body>
+</html>
+
+
+
+
