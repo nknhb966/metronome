@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stopwatch</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@200;300;500&family=Cormorant+Garamond:wght@300&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0a0a0a;
+    color: #f0ece4;
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    padding: 48px 24px 52px;
+  }
+  header { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .rule { width: 40px; height: 1px; background: linear-gradient(90deg, transparent, #c9a961, transparent); }
+  h1 {
+    font-family: 'Cormorant Garamond', serif;
+    font-weight: 300; font-size: 1.05rem;
+    letter-spacing: 0.55em; text-transform: uppercase;
+    color: #a08840; padding-left: 0.55em;
+  }
+  main {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 36px;
+    flex: 1; justify-content: center;
+  }
+  #display {
+    font-size: 5.5rem; font-weight: 300;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em; line-height: 1; color: #f0ece4;
+  }
+  #display.countdown { color: #d95555; }
+  .divider { width: 200px; height: 1px; background: linear-gradient(90deg, transparent, #2a2a2a, transparent); }
+  #currentTime {
+    font-size: 3.8rem; font-weight: 200;
+    letter-spacing: 0.06em; color: #888;
+    font-variant-numeric: tabular-nums; line-height: 1;
+  }
+  footer { display: flex; gap: 10px; width: 100%; max-width: 300px; }
+  button {
+    flex: 1; font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem; font-weight: 500;
+    letter-spacing: 0.25em; text-transform: uppercase;
+    padding: 15px 0; border-radius: 4px;
+    cursor: pointer; border: none; transition: opacity 0.12s;
+  }
+  button:active { opacity: 0.6; }
+  #toggleBtn { flex: 2; background: #f0ece4; color: #0a0a0a; }
+  #resetBtn  { background: #1c1c1c; color: #555; border: 1px solid #222; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="rule"></div>
+  <h1>Stopwatch</h1>
+  <div class="rule"></div>
+</header>
+
+<main>
+  <div id="display">-00:03</div>
+  <div class="divider"></div>
+  <div id="currentTime">00:00:00</div>
+</main>
+
+<footer>
+  <button id="toggleBtn">▶ Start</button>
+  <button id="resetBtn">Reset</button>
+</footer>
+
+<script>
+const display     = document.getElementById("display");
+const currentTime = document.getElementById("currentTime");
+const toggleBtn   = document.getElementById("toggleBtn");
+const resetBtn    = document.getElementById("resetBtn");
+
+const START_SEC = -3;
+
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+// ── 表示用の状態 ──
+let running      = false;
+let startedAt    = null;   // Date.now() 基準
+let offsetSec    = START_SEC;
+let displayTimer = null;
+
+// ── 音スケジューラの状態 ──
+let schedulerTimer  = null;
+let nextBeepSec     = null;  // 次に鳴らすべき整数秒（stopwatch上の秒）
+let audioStartTime  = null;  // audioCtx.currentTime 上でのstopwatch 0秒時刻
+
+function pad(n) { return String(n).padStart(2, "0"); }
+function formatSec(s) {
+  const sign = s < 0 ? "-" : "";
+  const a = Math.abs(s);
+  return sign + pad(Math.floor(a / 60)) + ":" + pad(a % 60);
+}
+
+function getElapsedSec() {
+  return running ? offsetSec + (Date.now() - startedAt) / 1000 : offsetSec;
+}
+
+// ── ビープ：audioTime は audioCtx.currentTime 上の予約時刻 ──
+function scheduleBeep(audioTime, high) {
+  const osc = audioCtx.createOscillator();
+  const env = audioCtx.createGain();
+  osc.type = "sine";
+  osc.frequency.value = high ? 1800 : 900;
+  env.gain.setValueAtTime(0.5, audioTime);
+  env.gain.exponentialRampToValueAtTime(0.001, audioTime + 0.08);
+  osc.connect(env).connect(audioCtx.destination);
+  osc.start(audioTime);
+  osc.stop(audioTime + 0.1);
+}
+
+// ── 音スケジューラ：先読み100ms でキューに積む ──
+const LOOK_AHEAD = 0.1; // seconds
+
+function runScheduler() {
+  if (!running) return;
+
+  const now = audioCtx.currentTime;
+  const scheduleUntil = now + LOOK_AHEAD;
+
+  while (true) {
+    // nextBeepSec の audioCtx 上の時刻
+    const beepAt = audioStartTime + (nextBeepSec - START_SEC);
+    if (beepAt > scheduleUntil) break;
+
+    if (beepAt >= now - 0.01) { // 過去すぎる音は捨てる
+      const high = nextBeepSec >= 1;
+      scheduleBeep(beepAt, high);
+    }
+    nextBeepSec++;
+  }
+}
+
+// ── 表示ループ（250ms） ──
+function tickDisplay() {
+  const sec = Math.floor(getElapsedSec());
+  display.textContent = formatSec(sec);
+  display.classList.toggle("countdown", sec < 0);
+}
+
+// ── 開始 ──
+async function start() {
+  if (running) return;
+  if (audioCtx.state === "suspended") await audioCtx.resume();
+
+  running   = true;
+  startedAt = Date.now();
+
+  // audioCtx 上でstopwatch START_SEC 秒が対応する時刻を確定
+  // 現在elapsed = offsetSec、なので stopwatch 0秒 = 今から -offsetSec 秒後
+  audioStartTime = audioCtx.currentTime - (offsetSec - START_SEC);
+
+  // 次に鳴らすべき秒 = offsetSec の次の整数（START_SEC+1 以上）
+  nextBeepSec = Math.ceil(offsetSec);
+  if (nextBeepSec <= START_SEC) nextBeepSec = START_SEC + 1;
+
+  toggleBtn.textContent = "■ Stop";
+
+  // スケジューラを25msごとに回す（先読みで精密予約）
+  runScheduler();
+  schedulerTimer = setInterval(runScheduler, 25);
+
+  // 表示は250msで十分
+  displayTimer = setInterval(tickDisplay, 250);
+}
+
+// ── 停止 ──
+function stop() {
+  if (!running) return;
+  offsetSec = getElapsedSec();
+  running   = false;
+  clearInterval(schedulerTimer); schedulerTimer = null;
+  clearInterval(displayTimer);   displayTimer   = null;
+  toggleBtn.textContent = "▶ Start";
+  tickDisplay();
+}
+
+// ── リセット ──
+function reset() {
+  stop();
+  offsetSec = START_SEC;
+  tickDisplay();
+}
+
+toggleBtn.onclick = () => running ? stop() : start();
+resetBtn.onclick  = reset;
+
+// タブ非表示時は停止（復帰時に再開）
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && running) {
+    clearInterval(schedulerTimer); schedulerTimer = null;
+    clearInterval(displayTimer);   displayTimer   = null;
+  } else if (document.visibilityState === "visible" && running) {
+    // audioCtx は自動でsuspendされる場合があるので再開
+    audioCtx.resume().then(() => {
+      // audioStartTime はそのまま維持（壁時計ベースで正確）
+      nextBeepSec = Math.ceil(getElapsedSec());
+      if (nextBeepSec <= START_SEC) nextBeepSec = START_SEC + 1;
+      runScheduler();
+      schedulerTimer = setInterval(runScheduler, 25);
+      displayTimer   = setInterval(tickDisplay, 250);
+    });
+  }
+});
+
+// 現在時刻
+function updateClock() {
+  const n = new Date();
+  currentTime.textContent = pad(n.getHours()) + ":" + pad(n.getMinutes()) + ":" + pad(n.getSeconds());
+}
+updateClock();
+setInterval(updateClock, 1000);
+
+tickDisplay();
+</script>
+</body>
+</html>
